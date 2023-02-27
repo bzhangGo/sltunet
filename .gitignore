@@ -1,0 +1,9 @@
+*.pyc
+*.so
+*.egg-info
+*.whl
+.ipynb_checkpoints
+.DS_Store
+.idea
+.vscode
+.envrc
