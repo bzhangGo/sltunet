@@ -4,34 +4,38 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import glob
 import h5py
 import numpy as np
 import random
-from tensorflow.keras.preprocessing import image
 from utils.util import batch_indexer, token_indexer
 
 
 class Dataset(object):
-    def __init__(self, params, img_file, src_file, tgt_file,
-                 src_vocab, tgt_vocab, max_len=100, max_img_len=512,
-                 batch_or_token='batch',
-                 data_leak_ratio=0.5, target_size=None, f=''):
+    def __init__(self,
+                 params,
+                 img_file,
+                 src_file,
+                 tgt_file,
+                 max_len=100,
+                 max_img_len=512,
+                 batch_or_token='batch'):
         self.source = src_file
         self.target = tgt_file
         self.image = img_file
-        self.src_vocab = src_vocab
-        self.tgt_vocab = tgt_vocab
         self.max_len = max_len
         self.max_img_len = max_img_len
         self.batch_or_token = batch_or_token
-        self.data_leak_ratio = data_leak_ratio
-        self.target_size = target_size
-        self.f = f
+
+        self.src_vocab = params.src_vocab
+        self.tgt_vocab = params.tgt_vocab
+        self.data_leak_ratio = params.data_leak_ratio
+        self.img_feature_size = params.img_feature_size
         self.p = params
 
         self.leak_buffer = []
 
+        # We save the sign video features in h5py
+        # and dynamically load the features
         self.img_reader = h5py.File(self.image, 'r')
 
     def load_data(self, is_training=False):
@@ -39,6 +43,11 @@ class Dataset(object):
                 open(self.target, 'r') as tgt_reader: \
 
             while True:
+                # src_line: [feature index] [(<aug>)] [source text/glosses]
+                # tgt_line: target text
+                #   feature index -> sign video feature index in h5py, -1: not sign video features
+                #   <aug> -> optional, if it appears, the sample is from machine translation
+                #   source text/glosses -> machine translation source or sign gloss sequence
                 src_line = src_reader.readline()
                 tgt_line = tgt_reader.readline()
 
@@ -55,15 +64,16 @@ class Dataset(object):
                 img_index = int(src_line_tokens[0])
 
                 src_line = ' '.join(src_line_tokens[1:])
+
                 # apply stochastic BPE dropout
-                if is_training and random.random() > 0.4:
+                if is_training and random.random() < self.p.bpe_dropout_stochastic_rate:
                     src_line = src_line.strip().replace('@@ ', '')
                     tgt_line = tgt_line.strip().replace('@@ ', '')
 
                     # apply dropout
-                    aug=False
+                    aug = False
                     if '<aug>' in src_line:
-                        aug=True
+                        aug = True
                         src_line = ' '.join(src_line.strip().split()[1:])
 
                     src_line = self.p.src_bpe.process_line(src_line, dropout=self.p.src_bpe_dropout)
@@ -81,10 +91,11 @@ class Dataset(object):
     def get_reader(self, is_train=False):
         # We randomly crop and flip images to get 11 duplicated features
         # during training, we randomly sample one feature to simulate data augmentation for sign videos
-        N = 11 if is_train else 1
-        return random.randint(0, N-1)
+        range = self.p.img_aug_size if is_train else 1
+        return random.randint(0, range-1)
 
     def to_matrix(self, batch, is_train=False):
+        # perform batching
         batch_size = len(batch)
 
         src_lens = [len(sample[1]) for sample in batch]
@@ -103,32 +114,32 @@ class Dataset(object):
             s[eidx, :min(src_len, len(src_ids))] = src_ids[:src_len]
             t[eidx, :min(tgt_len, len(tgt_ids))] = tgt_ids[:tgt_len]
 
-        images_path = [sample[3] for sample in batch]
-        images = []
-        img_idx = []
-        dummy = np.zeros([1, self.target_size], dtype=np.float32)
-        for image_path in images_path:
-            if image_path < 0:
+        images_indices = [sample[3] for sample in batch]
+        images = []             # feature sequence
+        img_idx = []            # indicators -> whether this sample is sign example
+        dummy = np.zeros([1, self.img_feature_size], dtype=np.float32)
+        for image_index in images_indices:
+            if image_index < 0:
                 img_idx.append(0.0)
                 images.append(dummy)
                 continue
             else:
                 img_idx.append(1.0)
 
-
             i = self.get_reader(is_train)
-            new_image = self.img_reader["%s_%s_%s" % (image_path, self.f, i) if is_train else "%s_%s" % (image_path, self.f)][()]
+            new_image = self.img_reader[f"{image_index}_{i}" if is_train else f"{image_index}"][()]
             images.append(new_image)
 
         img_lens = [len(img) for img in images]
         img_len = min(max(img_lens), self.max_img_len)
-        m = np.zeros([batch_size, img_len, self.target_size], dtype=np.float32)
+
+        m = np.zeros([batch_size, img_len, self.img_feature_size], dtype=np.float32)
         mask = np.zeros([batch_size, img_len], dtype=np.float32)
         img_idx = np.asarray(img_idx, dtype=np.float32)
 
         for eidx, img in enumerate(images):
             m[eidx, :min(img_len, len(img))] = img[:img_len]
-            mask[eidx,  :min(img_len, len(img))] = 1.0
+            mask[eidx, :min(img_len, len(img))] = 1.0
 
         # construct sparse label sequence, for ctc training
         seq_indexes = []
@@ -141,7 +152,7 @@ class Dataset(object):
 
         seq_indexes = np.asarray(seq_indexes, dtype=np.int64)
         seq_values = np.asarray(seq_values, dtype=np.int32)
-        seq_shape = np.asarray([batch_size, tgt_len], dtype=np.int64)
+        seq_shape = np.asarray([batch_size, src_len], dtype=np.int64)
 
         return x, s, t, m, mask, (seq_indexes, seq_values, seq_shape), img_idx
 
@@ -176,8 +187,8 @@ class Dataset(object):
 
         buffer = self.leak_buffer
         self.leak_buffer = []
-        for i, (src_ids, tgt_ids, img_path) in enumerate(self.load_data(train)):
-            buffer.append((i, src_ids, tgt_ids, img_path))
+        for i, (src_ids, tgt_ids, img_index) in enumerate(self.load_data(train)):
+            buffer.append((i, src_ids, tgt_ids, img_index))
             if len(buffer) >= buffer_size:
                 for data in _handle_buffer(buffer):
                     # check whether the data is tailed

@@ -12,7 +12,7 @@ from tensorflow.python.training import device_setter
 from tensorflow.python.framework import device as pydev
 from tensorflow.core.framework import node_def_pb2
 
-from utils import util, dtype
+from utils import dtype
 
 
 def local_device_setter(num_devices=1,

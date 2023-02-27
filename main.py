@@ -6,28 +6,28 @@ from __future__ import print_function
 
 import os
 import time
-import copy
 import numpy as np
 import tensorflow as tf
 
 import evalu
-import lrs
+import sltunet
+import initializer as tinit
+from lr import get_lr
 from data import Dataset
-from models import model
 from search import beam_search
 from utils import parallel, cycle, util, queuer, saver, dtype
-from modules import initializer
 
 
 def tower_train_graph(train_features, optimizer, graph, params):
     # define multi-gpu training graph
     def _tower_train_graph(features):
         train_output = graph.train_fn(
-            features, params, initializer=initializer.get_initializer(params.initializer, params.initializer_gain))
+            features, params,
+            initializer=tinit.get_initializer(params.initializer, params.initializer_gain))
 
         tower_gradients = optimizer.compute_gradients(
             train_output["loss"] * tf.cast(params.loss_scale, tf.float32), colocate_gradients_with_ops=True)
-        tower_gradients = [(g / tf.cast(params.loss_scale, tf.float32), v) for g, v in tower_gradients]
+        tower_gradients = [(g/tf.cast(params.loss_scale, tf.float32), v) for g, v in tower_gradients]
 
         return {
             "loss": train_output["loss"],
@@ -73,16 +73,22 @@ def train(params):
     # loading dataset
     tf.logging.info("Begin Loading Training and Dev Dataset")
     start_time = time.time()
-    train_dataset = Dataset(params, params.img_train_file, params.src_train_file, params.tgt_train_file,
-                            params.src_vocab, params.tgt_vocab, params.max_len, params.max_img_len,
-                            batch_or_token=params.batch_or_token,
-                            data_leak_ratio=params.data_leak_ratio, target_size=params.target_size, f=params.f)
-    dev_dataset = Dataset(params, params.img_dev_file, params.src_dev_file, params.src_dev_file,
-                          params.src_vocab, params.src_vocab, params.eval_max_len, params.max_img_len,
-                          batch_or_token='batch',
-                          data_leak_ratio=params.data_leak_ratio, target_size=params.target_size, f=params.f)
+    train_dataset = Dataset(params,
+                            params.img_train_file,
+                            params.src_train_file,
+                            params.tgt_train_file,
+                            params.max_len,
+                            params.max_img_len,
+                            batch_or_token=params.batch_or_token)
+    dev_dataset = Dataset(params,
+                          params.img_dev_file,
+                          params.src_dev_file,
+                          params.src_dev_file,
+                          params.eval_max_len,
+                          params.max_img_len,
+                          batch_or_token='batch')
     tf.logging.info(
-        "End Loading dataset, within {} seconds".format(time.time() - start_time))
+        f"End Loading dataset, within {time.time() - start_time} seconds")
 
     # Build Graph
     with tf.Graph().as_default():
@@ -104,37 +110,32 @@ def train(params):
         # session info
         sess = util.get_session(params.gpus)
 
-        tf.logging.info("Begining Building Training Graph")
         start_time = time.time()
+        tf.logging.info("Begining Building Training Graph")
 
         # create global step
         global_step = tf.train.get_or_create_global_step()
-
         # set up optimizer
-        optimizer = tf.train.AdamOptimizer(lr,
-                                           beta1=params.beta1,
-                                           beta2=params.beta2,
-                                           epsilon=params.epsilon)
+        optimizer = tf.train.AdamOptimizer(
+            lr, beta1=params.beta1, beta2=params.beta2, epsilon=params.epsilon)
 
         # get graph
-        graph = model.get_model(params.model_name)
-
+        graph = sltunet
         # set up training graph
         loss, gradients = tower_train_graph(features, optimizer, graph, params)
 
-        # apply pseudo cyclic parallel operation
-        vle, ops = cycle.create_train_op({"loss": loss}, gradients,
-                                         optimizer, global_step, params)
+        # apply parallel operation, accounting gradient accumulation
+        vle, ops = cycle.create_train_op(
+            {"loss": loss}, gradients, optimizer, global_step, params)
+        tf.logging.info(f"End Building Training Graph, within {time.time() - start_time} seconds")
 
-        tf.logging.info("End Building Training Graph, within {} seconds".format(time.time() - start_time))
-
-        tf.logging.info("Begin Building Inferring Graph")
         start_time = time.time()
+        tf.logging.info("Begin Building Inferring Graph")
 
         # set up infer graph
         eval_seqs, eval_scores = tower_infer_graph(features, graph, params)
 
-        tf.logging.info("End Building Inferring Graph, within {} seconds".format(time.time() - start_time))
+        tf.logging.info(f"End Building Inferring Graph, within {time.time() - start_time} seconds")
 
         # initialize the model
         sess.run(tf.global_variables_initializer())
@@ -160,12 +161,11 @@ def train(params):
         sess.run(tf.assign(global_step, 0))
 
         tf.logging.info("Trying restore existing parameters")
-        # inception_utils.load_model(sess, params.pretrained_inception)
         train_saver.restore(sess)
 
         # setup learning rate
         params.lrate = params.recorder.lrate
-        adapt_lr = lrs.get_lr(params)
+        adapt_lr = get_lr(params)
 
         start_time = time.time()
         start_epoch = params.recorder.epoch
@@ -197,7 +197,7 @@ def train(params):
                         segments = params.recorder.lidx // 5
                         if params.recorder.lidx < 5 or lidx % segments == 0:
                             tf.logging.info(
-                                "{} Passing {}-th index according to record".format(util.time_str(time.time()), lidx))
+                                f"Passing {lidx}-th index according to record")
 
                         continue
 
@@ -249,26 +249,26 @@ def train(params):
                 if cycle_counter == params.update_cycle:
                     cycle_counter = 0
 
-                    # directly update parameters, usually this works well
+                    # directly update parameters, often this works well
                     if not params.safe_nan:
                         _, loss, gnorm, pnorm, gstep = sess.run(
-                            [ops["train_op"], vle["loss"], vle["gradient_norm"], vle["parameter_norm"],
-                             global_step], feed_dict=feed_dicts)
+                            [ops["train_op"], vle["loss"], vle["gradient_norm"], vle["parameter_norm"], global_step],
+                            feed_dict=feed_dicts)
 
                         if np.isnan(loss) or np.isinf(loss) or np.isnan(gnorm) or np.isinf(gnorm):
-                            tf.logging.error("Nan or Inf raised! Loss {} GNorm {}.".format(loss, gnorm))
+                            tf.logging.error(f"Nan or Inf raised! Loss {loss} GNorm {gnorm}.")
                             params.recorder.estop = True
                             break
                     else:
-                        # Notice, applying safe nan can help train the big model, but sacrifice speed
+                        # Note, applying safe nan can help train the big model, but sacrifice speed
                         loss, gnorm, pnorm, gstep = sess.run(
                             [vle["loss"], vle["gradient_norm"], vle["parameter_norm"], global_step],
                             feed_dict=feed_dicts)
 
                         if np.isnan(loss) or np.isinf(loss) or np.isnan(gnorm) or np.isinf(gnorm) \
-                                or gnorm > params.gnorm_upper_bound:
+                            or gnorm > params.gnorm_upper_bound:
                             tf.logging.error(
-                                "Nan or Inf raised, GStep {} is passed! Loss {} GNorm {}.".format(gstep, loss, gnorm))
+                                f"Nan or Inf raised, GStep {gstep} is passed! Loss {loss} GNorm {gnorm}.")
                             continue
 
                         sess.run(ops["train_op"], feed_dict=feed_dicts)
@@ -279,10 +279,8 @@ def train(params):
                             "{} Epoch {}, GStep {}~{}, LStep {}~{}, "
                             "Loss {:.3f}, GNorm {:.3f}, PNorm {:.3f}, Lr {:.5f}, "
                             "Src {}, Tgt {}, Tokens {}, UD {:.3f} s".format(
-                                util.time_str(end_time), epoch,
-                                gstep - params.disp_freq + 1, gstep,
-                                lidx - params.disp_freq + 1, lidx,
-                                loss, gnorm, pnorm,
+                                util.time_str(end_time), epoch, gstep - params.disp_freq + 1, gstep,
+                                lidx - params.disp_freq + 1, lidx, loss, gnorm, pnorm,
                                 adapt_lr.get_lr(), data['src'].shape, data['tgt'].shape,
                                 np.sum(cum_tokens), end_time - start_time)
                         )
@@ -296,21 +294,14 @@ def train(params):
 
                     # trigger model evaluation
                     if gstep > 0 and gstep % params.eval_freq == 0:
-                        if params.ema_decay > 0.:
-                            sess.run(ops['ema_backup_op'])
-                            sess.run(ops['ema_assign_op'])
-
                         tf.logging.info("Start Evaluating")
                         eval_start_time = time.time()
                         tranes, scores, indices = evalu.decoding(
-                            sess, features, eval_seqs,
-                            eval_scores, dev_dataset, params)
-                        bleu = evalu.eval_metric(tranes, params.tgt_dev_file, indices=indices, remove_bpe=params.remove_bpe)
+                            sess, features, eval_seqs, eval_scores, dev_dataset, params)
+                        bleu = evalu.eval_metric(
+                            tranes, params.tgt_dev_file, indices=indices, remove_bpe=params.remove_bpe)
                         eval_end_time = time.time()
                         tf.logging.info("End Evaluating")
-
-                        if params.ema_decay > 0.:
-                            sess.run(ops['ema_restore_op'])
 
                         tf.logging.info(
                             "{} GStep {}, Scores {}, BLEU {}, Duration {:.3f} s".format(
@@ -349,12 +340,14 @@ def train(params):
                     if gstep > 0 and gstep % params.sample_freq == 0:
                         tf.logging.info("Start Sampling")
                         decode_seqs, decode_scores = sess.run(
-                            [eval_seqs[:1], eval_scores[:1]], feed_dict={features[0]["image"]: data["img"][:5], features[0]["mask"]: data["mask"][:5]})
+                            [eval_seqs[:1], eval_scores[:1]],
+                            feed_dict={
+                                features[0]["image"]: data["img"][:5],
+                                features[0]["mask"]: data["mask"][:5],
+                                features[0]["source"]: data["src"][:5]})
                         tranes, scores = evalu.decode_hypothesis(decode_seqs, decode_scores, params)
 
                         for sidx in range(min(5, len(scores))):
-                            # sample_source = evalu.decode_target_token(data['src'][sidx], params.src_vocab)
-                            # tf.logging.info("{}-th Source: {}".format(sidx, ' '.join(sample_source)))
                             sample_target = evalu.decode_target_token(data['tgt'][sidx], params.tgt_vocab)
                             tf.logging.info("{}-th Target: {}".format(sidx, ' '.join(sample_target)))
                             sample_trans = tranes[sidx]
@@ -380,33 +373,6 @@ def train(params):
 
             adapt_lr.after_epoch(eidx=epoch)
 
-    # Final Evaluation
-    tf.logging.info("Start Final Evaluating")
-    if params.ema_decay > 0.:
-        sess.run(ops['ema_backup_op'])
-        sess.run(ops['ema_assign_op'])
-
-    gstep = int(params.recorder.step + 1)
-    eval_start_time = time.time()
-    tranes, scores, indices = evalu.decoding(sess, features, eval_seqs, eval_scores, dev_dataset, params)
-    bleu = evalu.eval_metric(tranes, params.tgt_dev_file, indices=indices, remove_bpe=params.remove_bpe)
-    eval_end_time = time.time()
-    tf.logging.info("End Evaluating")
-
-    if params.ema_decay > 0.:
-        sess.run(ops['ema_restore_op'])
-
-    tf.logging.info(
-        "{} GStep {}, Scores {}, BLEU {}, Duration {:.3f} s".format(
-            util.time_str(eval_end_time), gstep, np.mean(scores), bleu, eval_end_time - eval_start_time)
-    )
-
-    # save eval translation
-    evalu.dump_tanslation(
-        tranes,
-        os.path.join(params.output_dir, "eval-{}.trans.txt".format(gstep)),
-        indices=indices)
-
     tf.logging.info("Your training is finished :)")
 
     return train_saver.best_score
@@ -416,10 +382,13 @@ def evaluate(params):
     # loading dataset
     tf.logging.info("Begin Loading Test Dataset")
     start_time = time.time()
-    test_dataset = Dataset(params, params.img_test_file, params.src_test_file, params.src_test_file,
-                           params.src_vocab, params.src_vocab, params.eval_max_len, params.max_img_len,
-                           batch_or_token='batch',
-                           data_leak_ratio=params.data_leak_ratio, target_size=params.target_size, f=params.f)
+    test_dataset = Dataset(params,
+                           params.img_test_file,
+                           params.src_test_file,
+                           params.src_test_file,
+                           params.eval_max_len,
+                           params.max_img_len,
+                           batch_or_token='batch')
     tf.logging.info(
         "End Loading dataset, within {} seconds".format(time.time() - start_time))
 
@@ -438,26 +407,16 @@ def evaluate(params):
         # session info
         sess = util.get_session(params.gpus)
 
-        tf.logging.info("Begining Building Evaluation Graph")
         start_time = time.time()
+        tf.logging.info("Begining Building Evaluation Graph")
 
         # get graph
-        graph = model.get_model(params.model_name)
+        graph = sltunet
 
         # set up infer graph
         eval_seqs, eval_scores = tower_infer_graph(features, graph, params)
 
-        tf.logging.info("End Building Inferring Graph, within {} seconds".format(time.time() - start_time))
-
-        # set up ema
-        if params.ema_decay > 0.:
-            # recover from EMA
-            ema = tf.train.ExponentialMovingAverage(decay=params.ema_decay)
-            ema.apply(tf.trainable_variables())
-            ema_assign_op = tf.group(*(tf.assign(var, ema.average(var).read_value())
-                                       for var in tf.trainable_variables()))
-        else:
-            ema_assign_op = tf.no_op()
+        tf.logging.info(f"End Building Inferring Graph, within {time.time() - start_time} seconds")
 
         # initialize the model
         sess.run(tf.global_variables_initializer())
@@ -471,7 +430,6 @@ def evaluate(params):
         # restore parameters
         tf.logging.info("Trying restore existing parameters")
         eval_saver.restore(sess, params.output_dir)
-        sess.run(ema_assign_op)
 
         tf.logging.info("Starting Evaluating")
         eval_start_time = time.time()

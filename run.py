@@ -9,6 +9,7 @@ import os
 import codecs
 import random
 import socket
+import json
 
 import numpy as np
 import tensorflow as tf
@@ -18,7 +19,6 @@ import models
 import main as graph
 from utils.apply_bpe import BPE
 from vocab import Vocab
-from utils.recorder import Recorder
 from utils import dtype, util
 
 logger = tf.get_logger()
@@ -39,7 +39,7 @@ global_params = tc.training.HParams(
     tgt_codes='',
     src_bpe_dropout=0.,
     tgt_bpe_dropout=0.,
-
+    bpe_dropout_stochastic_rate=0.6,
 
     # decoding maximum length: source length + decode_length
     decode_length=50,
@@ -53,47 +53,25 @@ global_params = tc.training.HParams(
     beam_search_temperature=1.0,
     # return top elements, not used
     top_beams=1,
-
+    # remove BPE symbols at evaluation
     remove_bpe=False,
-    img_train_file="",
-    img_dev_file="",
-    img_test_file="",
-    target_size=2048,
 
+    # ctc setting for tf's ctc loss, handeling invalid paths
     ctc_repeated=False,
+    # whether add ctc-loss during training
     ctc_enable=False,
-    ctc_alpha=0.3,      # ctc loss factor
+    # ctc loss factor, corresponding to \alpha in Eq. (3)
+    ctc_alpha=0.3,
 
-    use_src_rpr=False,
-    use_tgt_rpr=False,
-    use_srctgt_rpr=False,
-
-    tune_incept=True,
-    pretrained_inception="",
-
-    max_img_len=512,
-    f = '',
-
-    # relative position encoding
-    max_relative_position=16,
-
-    # lrate decay
-    # number of shards
-    nstable=4,
-    # start, end: learning rate decay parameters used in GNMT+
-    lrdecay_start=600000,
-    lrdecay_end=1200000,
-    # warmup steps: start point for learning rate stop increaing
+    # learning rate setup
+    # warmup steps: start point for learning rate stop increasing
     warmup_steps=400,
-    # select strategy: noam, gnmt+, epoch, score and vanilla
-    lrate_strategy="gnmt+",
-    # learning decay rate
-    lrate_decay=0.5,
-    # when using score, patience number of bad score obtained for one decay
-    lrate_patience=1,
-
-    # early stopping
-    estop_patience=100,
+    # initial learning rate
+    lrate=1e-5,
+    # minimum learning rate
+    min_lrate=0.0,
+    # maximum learning rate
+    max_lrate=1.0,
 
     # initialization
     # type of initializer
@@ -101,23 +79,23 @@ global_params = tc.training.HParams(
     # initializer range control
     initializer_gain=0.08,
 
-    # parameters for rnnsearch
+    # parameters for transformer
     # encoder and decoder hidden size
-    hidden_size=1000,
+    hidden_size=512,
     # source and target embedding size
-    embed_size=620,
+    embed_size=512,
+    # sign video feature size
+    img_feature_size=2048,
+    # sign video duplicate size
+    img_aug_size=11,
+    # ffn filter size for transformer
+    filter_size=2048,
     # dropout value
     dropout=0.1,
     relu_dropout=0.1,
     residual_dropout=0.1,
-    # label smoothing value
-    label_smooth=0.1,
-    # model name
-    model_name="rnnsearch",
     # scope name
-    scope_name="rnnsearch",
-    # filter size for transformer
-    filter_size=2048,
+    scope_name="transformer",
     # attention dropout
     attention_dropout=0.1,
     # the number of encoder layers, valid for deep nmt
@@ -129,7 +107,8 @@ global_params = tc.training.HParams(
 
     # allowed maximum sentence length
     max_len=100,
-    eval_max_len=1000000,
+    max_img_len=512,
+    eval_max_len=1000,
     # constant batch size at 'batch' mode for batch-based batching
     batch_size=80,
     # constant token size at 'token' mode for token-based batching
@@ -143,11 +122,13 @@ global_params = tc.training.HParams(
 
     # whether use multiprocessing deal with data reading, default true
     process_num=1,
-    # buffer size controls the number of sentences readed in one time,
+    # buffer size controls the number of sentences read in one time,
     buffer_size=100,
     # a unique queue in multi-thread reading process
     input_queue_size=100,
     output_queue_size=100,
+    # data leak buffer threshold
+    data_leak_ratio=0.5,
 
     # source vocabulary
     src_vocab_file="",
@@ -157,17 +138,23 @@ global_params = tc.training.HParams(
     src_train_file="",
     # target train file
     tgt_train_file="",
+    # sign video train file
+    img_train_file="",
     # source development file
     src_dev_file="",
     # target development file
     tgt_dev_file="",
+    # sign video dev file
+    img_dev_file="",
     # source test file
     src_test_file="",
     # target test file
     tgt_test_file="",
-    # output directory
+    # sign video test file
+    img_test_file="",
+    # working directory
     output_dir="",
-    # output during testing
+    # test output file
     test_output="",
     # pretrained modeling
     pretrained_model="",
@@ -178,34 +165,26 @@ global_params = tc.training.HParams(
     epsilon=1e-9,
     # gradient clipping value
     clip_grad_norm=5.0,
-    # the gradient norm upper bound, to avoid wired large gradient norm, only works for safe nan mode
+    # gradient norm upper bound, avoid wired large gnorm, only works under safe-nan mode
     gnorm_upper_bound=1e20,
-    # initial learning rate
-    lrate=1e-5,
-    # minimum learning rate
-    min_lrate=0.0,
-    # maximum learning rate
-    max_lrate=1.0,
-
+    # early stopping
+    estop_patience=100,
+    # label smoothing value
+    label_smooth=0.1,
     # maximum epochs
     epoches=10,
     # the effective batch size is: batch/token size * update_cycle * num_gpus
     # sequential update cycle
     update_cycle=1,
-    # the number of gpus
+    # the available gpus
     gpus=[0],
-
-    # enable safely handle nan
+    # enable safely handle nan (only helpful for some wired large/nan norms)
     safe_nan=False,
-
-    # exponential moving average for stability, disabled by default
-    ema_decay=-1.,
-
-    # data leak buffer threshold
-    data_leak_ratio=0.5,
 
     # enable training deep transformer
     deep_transformer_init=False,
+    # which task to evaluate, supporting sign2text, sign2gloss, gloss2text
+    eval_task="sign2text",
 
     # print information every disp_freq training steps
     disp_freq=100,
@@ -228,7 +207,7 @@ global_params = tc.training.HParams(
     # whether or not train from checkpoint
     train_continue=True,
 
-    # provide interface to modify the default datatype
+    # support for float32/float16
     default_dtype="float32",
     dtype_epsilon=1e-8,
     dtype_inf=1e8,
@@ -268,10 +247,22 @@ def load_parameters(params, output_dir):
     return params
 
 
+class Recorder(object):
+    def load_from_json(self, file_name):
+        tf.logging.info("Loading recoder file from {}".format(file_name))
+        with open(file_name, 'r', encoding='utf-8') as fh:
+            self.__dict__.update(json.load(fh))
+
+    def save_to_json(self, file_name):
+        tf.logging.info("Saving recorder file into {}".format(file_name))
+        with open(file_name, 'w', encoding='utf-8') as fh:
+            json.dump(self.__dict__, fh, indent=2)
+
+
 # build training process recorder
 def setup_recorder(params):
     recorder = Recorder()
-    # This is for early stopping, currently I did not use it
+    # for early stopping
     recorder.bad_counter = 0    # start from 0
     recorder.estop = False
 
@@ -342,8 +333,7 @@ def main(_):
     params.tgt_bpe = BPE(codecs.open(params.tgt_codes, encoding='utf-8'), -1, '@@', None, None)
     tf.logging.info("End Loading Vocabulary, Source Vocab Size {}, "
                     "Target Vocab Size {}, within {} seconds"
-                    .format(params.src_vocab.size(), params.tgt_vocab.size(),
-                            time.time() - start_time))
+                    .format(params.src_vocab.size(), params.tgt_vocab.size(), time.time() - start_time))
 
     # print parameters
     print_parameters(params)
@@ -357,19 +347,15 @@ def main(_):
     if mode == "train":
         # save parameters
         save_parameters(params, params.output_dir)
-
         # load the recorder
         params = setup_recorder(params)
 
         graph.train(params)
     elif mode == "test":
         graph.evaluate(params)
-    elif mode == "score":
-        graph.scorer(params)
     else:
         tf.logging.error("Invalid mode: {}".format(mode))
 
 
 if __name__ == '__main__':
-
     tf.app.run()

@@ -22,11 +22,14 @@ def beam_search(features, encoding_fn, decoding_fn, params):
     alpha = params.decode_alpha
     eos_id = params.tgt_vocab.eos()
     pad_id = params.tgt_vocab.pad()
+    eval_task = params.eval_task
 
     batch_size = tf.shape(features["image"])[0]
-    model_state = encoding_fn(features["image"], features["mask"])
+    if eval_task in ('sign2text', 'sign2gloss'):
+        model_state = encoding_fn(features["image"], features["mask"])
+    else:
+        model_state = encoding_fn(features["source"], None)
 
-    # src_mask = dtype.tf_to_float(tf.cast(features["source"], tf.bool))
     src_mask = features["mask"]
     source_length = tf.reduce_sum(src_mask, -1)
     max_target_length = source_length + decode_length

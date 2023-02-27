@@ -103,63 +103,6 @@ def combine_heads(inputs, name=None):
         return x
 
 
-def additive_attention(query, memory, mem_mask, hidden_size,
-                       ln=False, proj_memory=None, num_heads=1,
-                       dropout=None, att_fun="add", scope=None):
-    """
-    additive attention model
-    :param query: [batch_size, dim]
-    :param memory: [batch_size, seq_len, mem_dim]
-    :param mem_mask: [batch_size, seq_len]
-    :param hidden_size: attention space dimension
-    :param ln: whether use layer normalization
-    :param proj_memory: this is the mapped memory for saving memory
-    :param num_heads: attention head number
-    :param dropout: attention dropout, default disable
-    :param scope:
-    :return: a value matrix, [batch_size, mem_dim]
-    """
-    with tf.variable_scope(scope or "additive_attention",
-                           dtype=tf.as_dtype(dtype.floatx())):
-        if proj_memory is None:
-            proj_memory = linear(memory, hidden_size, ln=ln, scope="feed_memory")
-
-        query = linear(tf.expand_dims(query, 1), hidden_size, ln=ln, scope="feed_query")
-
-        query = split_heads(query, num_heads)
-        proj_memory = split_heads(proj_memory, num_heads)
-
-        if att_fun == "add":
-            value = tf.tanh(query + proj_memory)
-
-            logits = linear(value, 1, ln=False, scope="feed_logits")
-            logits = tf.squeeze(logits, -1)
-        else:
-            logits = tf.matmul(query, proj_memory, transpose_b=True)
-            logits = tf.squeeze(logits, 2)
-
-        logits = util.mask_scale(logits, tf.expand_dims(mem_mask, 1))
-
-        weights = tf.nn.softmax(logits, -1)  # [batch_size, seq_len]
-
-        dweights = util.valid_apply_dropout(weights, dropout)
-
-        memory = split_heads(memory, num_heads)
-        value = tf.reduce_sum(
-            tf.expand_dims(dweights, -1) * memory, -2, keepdims=True)
-
-        value = combine_heads(value)
-        value = tf.squeeze(value, 1)
-
-        results = {
-            'weights': weights,
-            'output': value,
-            'cache_state': proj_memory
-        }
-
-        return results
-
-
 def dot_attention(query, memory, mem_mask, hidden_size,
                   ln=False, num_heads=1, cache=None, dropout=None,
                   out_map=True, scope=None):
@@ -179,8 +122,6 @@ def dot_attention(query, memory, mem_mask, hidden_size,
     """
     with tf.variable_scope(scope or "dot_attention", reuse=tf.AUTO_REUSE,
                            dtype=tf.as_dtype(dtype.floatx())):
-        if fuse_mask is not None:
-            assert memory is not None, 'Fuse mechanism only applied with cross-attention'
 
         if memory is None:
             # suppose self-attention from queries alone
@@ -206,15 +147,12 @@ def dot_attention(query, memory, mem_mask, hidden_size,
                 cache['mk'] = k
                 cache['mv'] = v
 
+        # [bs, len, d] => [bs, h, len, d/h]
         q = split_heads(q, num_heads)
         k = split_heads(k, num_heads)
         v = split_heads(v, num_heads)
 
         q *= (hidden_size // num_heads) ** (-0.5)
-
-        q_shp = util.shape_list(q)
-        k_shp = util.shape_list(k)
-        v_shp = util.shape_list(v)
 
         # q * k => attention weights
         logits = tf.matmul(q, k, transpose_b=True)
@@ -223,7 +161,6 @@ def dot_attention(query, memory, mem_mask, hidden_size,
             logits += mem_mask
 
         weights = tf.nn.softmax(logits)
-
         dweights = util.valid_apply_dropout(weights, dropout)
 
         # weights * v => attention vectors

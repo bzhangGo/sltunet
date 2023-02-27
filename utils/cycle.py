@@ -112,22 +112,6 @@ def create_train_op(named_scalars, grads_and_vars, optimizer, global_step, param
         "train_op": train_op
     }
 
-    # apply ema
-    if params.ema_decay > 0.:
-        tf.logging.info('Using Exp Moving Average to train the model with decay {}.'.format(params.ema_decay))
-        ema = tf.train.ExponentialMovingAverage(decay=params.ema_decay, num_updates=global_step)
-        ema_op = ema.apply(variables)
-        with tf.control_dependencies([ops['train_op']]):
-            ops['train_op'] = tf.group(ema_op)
-        bck_vars = _replicate_variables(variables, suffix="CTrainOpBackUpReplica")
-
-        ops['ema_backup_op'] = tf.group(*(tf.assign(bck, var.read_value())
-                                        for bck, var in zip(bck_vars, variables)))
-        ops['ema_restore_op'] = tf.group(*(tf.assign(var, bck.read_value())
-                                         for bck, var in zip(bck_vars, variables)))
-        ops['ema_assign_op'] = tf.group(*(tf.assign(var, ema.average(var).read_value())
-                                        for var in variables))
-
     ret = named_scalars
     ret.update({
         "gradient_norm": grand_norm,

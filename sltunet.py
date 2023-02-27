@@ -8,26 +8,25 @@ import copy
 import tensorflow as tf
 
 import func
-from models import model
 from utils import util, dtype
 
 
-def encoder(source, mask, params, is_training=False, mt=False, is_gloss=False):
-    # - mt: if true, source is word ids and we need an embedding layer to extract source input
-    #       if false, source is sign video features
-    # - is_gloss: if true, translation into glosses
-    #             if false, translation into text, we append an indicator vector to guide the model where to generate
+def encoder(source, mask, params, in_text=False, to_gloss=False):
+    # - in_text: if true, source is word ids and we need an embedding layer to extract source input
+    #            if false, source is sign video features
+    # - to_gloss: if true, translation into glosses
+    #             if false, translation into text
+    #   we append an indicator vector to guide the model where to generate
 
-    # remapping
     hidden_size = params.hidden_size
+    initializer = tf.random_normal_initializer(0.0, hidden_size ** -0.5)
 
-    if not mt:
-        # features = tf.reshape(features, [sshp[0], sshp[1], util.shape_list(features)[-1]])
+    if not in_text:
+        # project sign video features to the embedding space
         features = func.linear(source, hidden_size, scope="premapper")
 
     else:
         mask = dtype.tf_to_float(tf.cast(source, tf.bool))
-        initializer = tf.random_normal_initializer(0.0, hidden_size ** -0.5)
 
         embed_name = "embedding" if params.shared_source_target_embedding \
             else "src_embedding"
@@ -39,18 +38,18 @@ def encoder(source, mask, params, is_training=False, mt=False, is_gloss=False):
         inputs = tf.gather(src_emb, source) * (hidden_size ** 0.5)
         features = tf.nn.bias_add(inputs, src_bias)
 
-    # handle source or target generation
+    # handle text or gloss generation
     gloss_indicator = tf.get_variable("gloss", [1, params.embed_size])
     trans_indicator = tf.get_variable("trans", [1, params.embed_size])
-    indicator = gloss_indicator if is_gloss else trans_indicator
+    indicator = gloss_indicator if to_gloss else trans_indicator
 
+    # adding indicator in front of the inputs
     mask = tf.pad(mask, [[0, 0], [1, 0]], constant_values=1)
     ishp = util.shape_list(features)
     features = tf.concat([util.expand_tile_dims(indicator, ishp[0], axis=0), features], 1)
 
     inputs = func.add_timing_signal(features)
     inputs = func.layer_norm(inputs)
-
     inputs = util.valid_apply_dropout(inputs, params.dropout)
 
     with tf.variable_scope("encoder"):
@@ -63,8 +62,11 @@ def encoder(source, mask, params, is_training=False, mt=False, is_gloss=False):
                     distribution="uniform")
             else:
                 layer_initializer = None
-            # modality-specific layers: when layer <= params.sep_layer, we apply different transformer encoder layers to sign videos and texts
-            with tf.variable_scope("layer_{}".format(layer) if layer > params.sep_layer else "layer_{}_{}".format(layer, 'mt' if mt else 'st'), initializer=layer_initializer):
+            # modality-specific layers:
+            # - when layer <= sep_layer, we apply different encoder layers to sign videos and texts
+            with tf.variable_scope(
+                "layer_{}".format(layer) if layer > params.sep_layer else "layer_{}_{}".format(layer, 'mt' if in_text else 'st'),
+                initializer=layer_initializer):
                 with tf.variable_scope("self_attention"):
                     y = func.dot_attention(
                         x,
@@ -110,11 +112,7 @@ def decoder(target, state, params, labels=None, is_img=None):
     mask = dtype.tf_to_float(tf.cast(target, tf.bool))
     hidden_size = params.hidden_size
     initializer = tf.random_normal_initializer(0.0, hidden_size ** -0.5)
-
     is_training = ('decoder' not in state)
-
-    if is_training:
-        target, mask = util.remove_invalid_seq(target, mask)
 
     embed_name = "embedding" if params.shared_source_target_embedding \
         else "tgt_embedding"
@@ -160,12 +158,11 @@ def decoder(target, state, params, labels=None, is_img=None):
                         num_heads=params.num_heads,
                         dropout=params.attention_dropout,
                         cache=None if is_training else
-                        state['decoder']['state']['layer_{}'.format(layer)],
+                            state['decoder']['state']['layer_{}'.format(layer)],
                     )
                     if not is_training:
                         # k, v
-                        state['decoder']['state']['layer_{}'.format(layer)] \
-                            .update(y['cache'])
+                        state['decoder']['state']['layer_{}'.format(layer)].update(y['cache'])
 
                     y = y['output']
                     x = func.residual_fn(x, y, dropout=params.residual_dropout)
@@ -180,12 +177,11 @@ def decoder(target, state, params, labels=None, is_img=None):
                         num_heads=params.num_heads,
                         dropout=params.attention_dropout,
                         cache=None if is_training else
-                        state['decoder']['state']['layer_{}'.format(layer)],
+                            state['decoder']['state']['layer_{}'.format(layer)],
                     )
                     if not is_training:
                         # mk, mv
-                        state['decoder']['state']['layer_{}'.format(layer)] \
-                            .update(y['cache'])
+                        state['decoder']['state']['layer_{}'.format(layer)].update(y['cache'])
 
                     y = y['output']
                     x = func.residual_fn(x, y, dropout=params.residual_dropout)
@@ -202,8 +198,6 @@ def decoder(target, state, params, labels=None, is_img=None):
                     x = func.residual_fn(x, y, dropout=params.residual_dropout)
                     x = func.layer_norm(x)
     feature = x
-    if 'dev_decode' in state:
-        feature = x[:, -1, :]
 
     embed_name = "tgt_embedding" if params.shared_target_softmax_embedding \
         else "softmax_embedding"
@@ -247,12 +241,12 @@ def decoder(target, state, params, labels=None, is_img=None):
         enc_logits = func.linear(encoding, params.src_vocab.size() + 1, scope="ctc_mapper")
         # seq dimension transpose
         enc_logits = tf.transpose(enc_logits, (1, 0, 2))
-
         enc_logits = tf.to_float(enc_logits)
 
         with tf.name_scope('loss'):
-            ctc_loss = tf.nn.ctc_loss(labels, enc_logits, tf.cast(tf.reduce_sum(state['mask'], -1), tf.int32),
-                                      ignore_longer_outputs_than_inputs=True,preprocess_collapse_repeated=params.ctc_repeated)
+            ctc_loss = tf.nn.ctc_loss(
+                labels, enc_logits, tf.cast(tf.reduce_sum(state['mask'], -1), tf.int32),
+                ignore_longer_outputs_than_inputs=True, preprocess_collapse_repeated=params.ctc_repeated)
             ctc_loss /= tf.reduce_sum(mask, -1)
 
             if is_img is None:
@@ -271,53 +265,44 @@ def train_fn(features, params, initializer=None):
                            reuse=tf.AUTO_REUSE,
                            dtype=tf.as_dtype(dtype.floatx()),
                            custom_getter=dtype.float32_variable_storage_getter):
-        # features contains five conents
+        # features contains five items
         #  - image:  [batch, sign_video_len, feature_dim] (float) extracted sign video features based on SMKD
         #  - mask :  [batch, sign_video_len]              (float) mask for sign video features
         #  - source: [batch, src_seq_len] (int, ids) gloss or MT source inputs
         #  - target: [batch, tgt_seq_len] (int, ids) gloss translation or MT target
         #  - is_img: [batch] (float, like mask, 0.0 or 1.0) indicate whether the example comes from SLT
-        #            for example, SLT example contains sign videos; but MT doesn't
+        #       note SLT example contains sign videos; but MT doesn't
 
         # for SLT examples, the training data is a triple (sign video, gloss, text)
         # for MT  examples, the training data is also a triple (dummy video, source, target)
 
-        # sign translation
-        state = encoder(features['image'], features['mask'], params, is_training=True, mt=False, is_gloss=False)
-        loss_trans, _, _, _ = decoder(features['target'],  state, params,
-                                         labels=features['label'] if params.ctc_enable else None, is_img=features["is_img"])
+        # sign translation: sign2text
+        state = encoder(features['image'], features['mask'], params, in_text=False, to_gloss=False)
+        loss_trans, *others = decoder(
+            features['target'],  state, params,
+            labels=features['label'] if params.ctc_enable else None, is_img=features["is_img"])
 
-        # sign recognition
-        state = encoder(features['image'], features['mask'], params, is_training=True, mt=False, is_gloss=True)
-        loss_gloss, _, _, _ = decoder(features['source'],  state, params, labels=None, is_img=features["is_img"])
+        # sign recognition: sign2gloss
+        state = encoder(features['image'], features['mask'], params, in_text=False, to_gloss=True)
+        # note we only add one CTC objective in sing2text, here we directly set labels `None`
+        loss_gloss, *others = decoder(
+            features['source'],  state, params, labels=None, is_img=features["is_img"])
 
         # gloss2text translation & machine translation: both are text-to-text tasks
-        state = encoder(features['source'], None, params, is_training=True, mt=True, is_gloss=False)
-        loss_g2t, _, _, _ = decoder(features['target'],  state, params, labels=None, is_img=None)
+        state = encoder(features['source'], None, params, in_text=True, to_gloss=False)
+        loss_g2t, *others = decoder(features['target'],  state, params, labels=None, is_img=None)
+
+        # note included in the final objective
+        # # text2gloss translation
+        # state = encoder(features['target'], None, params, in_text=True, to_gloss=True)
+        # loss_t2g, *others = decoder(
+        #     features['source'],  state, params, labels=None, is_img=features["is_img"])
 
         # sum-up all loss terms
         loss = loss_trans + loss_gloss + loss_g2t
- 
 
         return {
             "loss": loss
-        }
-
-
-def score_fn(features, params, initializer=None):
-    params = copy.copy(params)
-    params = util.closing_dropout(params)
-    params.label_smooth = 0.0
-    with tf.variable_scope(params.scope_name or "model",
-                           initializer=initializer,
-                           reuse=tf.AUTO_REUSE,
-                           dtype=tf.as_dtype(dtype.floatx()),
-                           custom_getter=dtype.float32_variable_storage_getter):
-        state = encoder(features['image'], features['mask'], params, is_training=False, mt=False, is_gloss=False)
-        _, _, _, scores = decoder(features['target'], state, params)
-
-        return {
-            "score": scores
         }
 
 
@@ -330,7 +315,16 @@ def infer_fn(params):
                                reuse=tf.AUTO_REUSE,
                                dtype=tf.as_dtype(dtype.floatx()),
                                custom_getter=dtype.float32_variable_storage_getter):
-            state = encoder(image, mask, params, is_training=False, mt=False, is_gloss=False)
+            eval_task = params.eval_task
+            if eval_task == 'sign2text':
+                state = encoder(image, mask, params, in_text=False, to_gloss=False)
+            elif eval_task == 'sign2gloss':
+                state = encoder(image, mask, params, in_text=False, to_gloss=True)
+            elif eval_task == 'gloss2text':
+                state = encoder(image, mask, params, in_text=True, to_gloss=False)
+            else:
+                raise NotImplementedError(f"Not supporting {eval_task}")
+
             state["decoder"] = {
                 "state": state["decoder_initializer"]
             }
@@ -350,6 +344,3 @@ def infer_fn(params):
 
     return encoding_fn, decoding_fn
 
-
-# register the model, with a unique name
-model.model_register("transformer", train_fn, score_fn, infer_fn)

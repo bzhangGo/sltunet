@@ -6,7 +6,6 @@ from __future__ import print_function
 
 import os
 import time
-import pkgutil
 import collections
 import numpy as np
 import tensorflow as tf
@@ -271,37 +270,9 @@ def flatten_list(values):
     return [v for value in values for v in value]
 
 
-def remove_invalid_seq(sequence, mask):
-    """Pick valid sequence elements wrt mask"""
-    # sequence: [batch, sequence]
-    # mask: [batch, sequence]
-    boolean_mask = tf.reduce_sum(mask, axis=0)
-
-    # make sure that there are at least one element in the mask
-    first_one = tf.one_hot(0, tf.shape(boolean_mask)[0],
-                           dtype=tf.as_dtype(dtype.floatx()))
-    boolean_mask = tf.cast(boolean_mask + first_one, tf.bool)
-
-    filtered_seq = tf.boolean_mask(sequence, boolean_mask, axis=1)
-    filtered_mask = tf.boolean_mask(mask, boolean_mask, axis=1)
-    return filtered_seq, filtered_mask
-
-
 def time_str(t=None):
     """String format of the time long data"""
     if t is None:
         t = time.time()
     ts = time.strftime("[%Y-%m-%d %H:%M:%S]", time.localtime(t))
     return ts
-
-
-def dynamic_load_module(module, prefix=None):
-    """Load submodules inside a module, mainly used for model loading, not robust!!!"""
-    # loading all models under directory `models` dynamically
-    if not isinstance(module, str):
-        module = module.__path__
-    for importer, modname, ispkg in pkgutil.iter_modules(module):
-        if prefix is None:
-            __import__(modname)
-        else:
-            __import__("{}.{}".format(prefix, modname))

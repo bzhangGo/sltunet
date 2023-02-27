@@ -7,8 +7,6 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 
-# Copied from Keras
-
 # the type of float to use throughout the session.
 _FLOATX = 'float32'
 _EPSILON = 1e-8
