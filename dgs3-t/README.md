@@ -17,7 +17,7 @@ pip install git+https://github.com/bricksdont/datasets.git@fix_fps_check
 python generate_examples_dgs.py --tfds-data-dir tfds_datasets_custom --preprocess-glosses --output examples.json > generate.out 2> generate.err
 
 # split the whole document-level video into sentence-level segments
-python slice_videos.py --input examples.json --output-folder output --ffmpeg-custom-path "/fs/dagr0/bzhang/slt/corpus/dgs/mathias/dataset/ffmpeg/ffmpeg-git-20220722-amd64-static/ffmpeg" --num-workers 8 > slice
+python slice_videos.py --input examples.json --output-folder output --ffmpeg-custom-path "ffmpeg/ffmpeg-git-20220722-amd64-static/ffmpeg" --num-workers 8 > slice
 .out 2> slice.err
 ```
 

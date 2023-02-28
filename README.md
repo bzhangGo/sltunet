@@ -52,7 +52,7 @@ permission is given by the University of Hamburg.
 
 **Constructing DGS3-T**
 
-Please check out [dgs3-t](dgs3-t/README.md) for details.
+Please check out [dgs3-t](./dgs3-t) for details.
 
 
 ## Training and Evaluation
