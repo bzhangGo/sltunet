@@ -10,7 +10,7 @@ This document describes the rough procedure to train a SLTUnet model.
     ```
 2. Get MuST-C En-De dataset from [FBK](https://ict.fbk.eu/must-c/); note we used the data in v1.0
 
-We applied tokenization and subword modeling to these dataset. See [preprocess_phoenix.sh](./preprocess_phoenix.sh) for reference.
+    We applied tokenization and subword modeling to these dataset. See [preprocess_phoenix.sh](./preprocess_phoenix.sh) for reference.
 
 ### Step 2. Pretrain SMKD Embeddings
 
@@ -60,10 +60,10 @@ See the given running scripts `train.sh` for reference.
 
 3) Regarding evaluation, please checkout `eval/metrics.py` for details.
 
-For future evaluation and dataset construction, we suggest retaining the punctuations and 
+    For future evaluation and dataset construction, we suggest retaining the punctuations and 
 adopt detokenized BLEU. E.g.
 
-```bash
-python eval/metrics.py -t slt -hyp model-output-file -ref gold-reference-file
-```
-
+    ```bash
+    python eval/metrics.py -t slt -hyp model-output-file -ref gold-reference-file
+    ```
+    

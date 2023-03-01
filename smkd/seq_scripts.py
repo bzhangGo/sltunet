@@ -55,7 +55,7 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir, recoder,
         with torch.no_grad():
             ret_dict = model(vid, vid_lgt, label=label, label_lgt=label_lgt)
 
-        total_info += [file_name.split("|")[0] for file_name in data[-1]]
+        total_info += [file_name[2] for file_name in data[-1]]
         total_sent += ret_dict['recognized_sents']
         total_conv_sent += ret_dict['conv_sents']
     try:

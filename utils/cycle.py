@@ -100,11 +100,8 @@ def create_train_op(named_scalars, grads_and_vars, optimizer, global_step, param
                                               params.clip_grad_norm,
                                               use_norm=grand_norm)
 
-    # Update variables
-    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS) if params.tune_incept else [tf.no_op("update_op")]
-    with tf.control_dependencies(update_ops):
-        grads_and_vars = list(zip(gradients, variables))
-        train_op = optimizer.apply_gradients(grads_and_vars, global_step)
+    grads_and_vars = list(zip(gradients, variables))
+    train_op = optimizer.apply_gradients(grads_and_vars, global_step)
 
     ops = {
         "zero_op": zero_variables_op,

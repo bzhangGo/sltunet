@@ -15,7 +15,6 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.contrib as tc
 
-import models
 import main as graph
 from utils.apply_bpe import BPE
 from vocab import Vocab
@@ -302,9 +301,6 @@ def main(_):
                     "'pkill -9 -P {0}; kill -9 {0}'".format(pid))
     # On clusters, this could tell which machine you are running
     tf.logging.info("Your running machine name is {}".format(socket.gethostname()))
-
-    # load registered models
-    util.dynamic_load_module(models, prefix="models")
 
     params = global_params
 

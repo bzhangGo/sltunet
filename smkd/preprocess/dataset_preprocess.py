@@ -28,7 +28,7 @@ def csv2dict_phoneix2014(anno_path, dataset_type, extra_info=None):
             'signer': signer,
             'label': label,
             'num_frames': num_frames,
-            'original_info': (file_info, file_idx),
+            'original_info': (file_info, file_idx, fileid),
         }
     return info_dict
 
@@ -54,7 +54,7 @@ def csv2dict_csldaily(anno_path, dataset_type, dataset=None, dataset_split=None)
             'signer': file_info['signer'],
             'label': ' '.join(file_info['label_gloss']),
             'num_frames': num_frames,
-            'original_info': (file_info, actual_file_idx),
+            'original_info': (file_info, actual_file_idx, file_info['name']),
         }
 
         actual_file_idx += 1
@@ -86,7 +86,7 @@ def csv2dict_dgs(anno_path, dataset_type):
             'signer': 'Unknown',
             'label': gloss,
             'num_frames': num_frames,
-            'original_info': (file_info, file_idx),
+            'original_info': (file_info, file_idx, os.path.basename(img)),
         }
     return info_dict
 
@@ -133,6 +133,8 @@ if __name__ == '__main__':
                         help='path to the dataset')
 
     args = parser.parse_args()
+
+    args.dataset_root = os.path.abspath(args.dataset_root)
 
     csv2dict = None
     if args.dataset == 'phoenix2014':

@@ -21,7 +21,7 @@ do
         ${phoneix}/annotations/manual/PHOENIX-2014-T.${prefix}.corpus.csv \
         ${phoneix}/features/fullFrame-210x260px/ \
         ${prefix}
-    cat ${prefix}.src | tr '[:upper:]' '[:lower:]' | ${prefix}.${SRC}.raw
+    cat ${prefix}.src | tr '[:upper:]' '[:lower:]' > ${prefix}.${SRC}.raw
     ln -s ${prefix}.tgt ${prefix}.${TRG}
 done
 
@@ -85,7 +85,7 @@ python shuffle_corpus.py --corpus train.bpe.${SRC} train.bpe.${TRG}
 cat ${prefix}.bpe.${SRC}.no-first train.bpe.${TRG} > tmp
 
 # extract vocabulary
-python ../vocab.py tmp vocab.zero
+python vocab.py tmp vocab.zero
 python bpe_vocab_fuse.py ${SRC}${TRG}.bpe vocab.zero vocab.zero.drop
 rm tmp
 

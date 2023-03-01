@@ -100,7 +100,7 @@ def train(params):
             feature = {
                 "source": tf.placeholder(tf.int32, [None, None], "source"),
                 "target": tf.placeholder(tf.int32, [None, None], "target"),
-                "image": tf.placeholder(tf.float32, [None, None, params.target_size], "image"),
+                "image": tf.placeholder(tf.float32, [None, None, params.img_feature_size], "image"),
                 "mask": tf.placeholder(tf.float32, [None, None], "mask"),
                 "is_img": tf.placeholder(tf.float32, [None], "is_img"),
                 "label": tf.sparse_placeholder(tf.int32, name="label"),
@@ -398,7 +398,7 @@ def evaluate(params):
         for fidx in range(max(len(params.gpus), 1)):
             feature = {
                 "source": tf.placeholder(tf.int32, [None, None], "source"),
-                "image": tf.placeholder(tf.float32, [None, None, params.target_size], "image"),
+                "image": tf.placeholder(tf.float32, [None, None, params.img_feature_size], "image"),
                 "mask": tf.placeholder(tf.float32, [None, None], "mask"),
 
             }

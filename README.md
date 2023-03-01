@@ -54,6 +54,13 @@ permission is given by the University of Hamburg.
 
 Please check out [dgs3-t](./dgs3-t) for details.
 
+## Requirement
+
+The source code is based on older tensorflow.
+
+- python==3.8
+- tensorflow==1.15
+
 
 ## Training and Evaluation
 
@@ -67,7 +74,6 @@ Please check out [example](./example) for details.
 ![Resulst on Phoenix](phoenix.png)
 
 Check out [our paper](https://openreview.net/forum?id=EBS4C77p_5S) for more results on CSLDaily and DGS3-T.
-
 
 ## Citation
 
