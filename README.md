@@ -75,6 +75,10 @@ Please check out [example](./example) for details.
 
 Check out [our paper](https://openreview.net/forum?id=EBS4C77p_5S) for more results on CSLDaily and DGS3-T.
 
+* Update (2023/04/02): note, for CSL-Daily, **we always adopt subword preprocessing (NOT character) for the target text 
+and gloss sequence during training and inference**; 
+We post-process the generated subword sequence into a character sequence at evaluation for char-level BLEU.
+
 ## Citation
 
 If you draw any inspiration from our study, please consider to cite our paper:
