@@ -30,6 +30,12 @@ global_params = tc.training.HParams(
     shared_source_target_embedding=False,
     # whether share target and softmax word embedding
     shared_target_softmax_embedding=True,
+    
+    # sign embedding yaml config
+    sign_cfg='',
+    # sign gloss dict path
+    gloss_path='',
+    smkd_model_path='',
 
     # separately encoding textual and sign video until `sep_layer`
     sep_layer=0,
@@ -349,6 +355,8 @@ def main(_):
         graph.train(params)
     elif mode == "test":
         graph.evaluate(params)
+    elif mode == "infer":
+        graph.inference(params)
     else:
         tf.logging.error("Invalid mode: {}".format(mode))
 

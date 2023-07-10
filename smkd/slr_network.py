@@ -1,11 +1,17 @@
 
-import utils
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
-from modules.criterions import SeqKD
-from modules import BiLSTMLayer, TemporalConv
+
+try:
+    import utils
+    from modules.criterions import SeqKD
+    from modules import BiLSTMLayer, TemporalConv
+except:
+    from . import utils
+    from .modules.criterions import SeqKD
+    from .modules import BiLSTMLayer, TemporalConv
 
 
 class Identity(nn.Module):

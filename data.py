@@ -36,7 +36,11 @@ class Dataset(object):
 
         # We save the sign video features in h5py
         # and dynamically load the features
-        self.img_reader = h5py.File(self.image, 'r')
+        if isinstance(self.image, str):
+            self.img_reader = h5py.File(self.image, 'r')
+        else:
+            assert isinstance(self.image, dict)
+            self.img_reader = self.image
 
     def load_data(self, is_training=False):
         with open(self.source, 'r') as src_reader, \
@@ -127,7 +131,11 @@ class Dataset(object):
                 img_idx.append(1.0)
 
             i = self.get_reader(is_train)
-            new_image = self.img_reader[f"{image_index}_{i}" if is_train else f"{image_index}"][()]
+            img_key = f"{image_index}_{i}" if is_train else f"{image_index}"
+            if not isinstance(self.img_reader, dict):
+                new_image = self.img_reader[img_key][()]
+            else:
+                new_image = self.img_reader[img_key]
             images.append(new_image)
 
         img_lens = [len(img) for img in images]

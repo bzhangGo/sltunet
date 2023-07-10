@@ -14,7 +14,11 @@ import numpy as np
 import pyarrow as pa
 from PIL import Image
 import torch.utils.data as data
-from utils import video_augmentation
+
+try:
+    from utils import video_augmentation
+except:
+    from ..utils import video_augmentation
 
 sys.path.append("..")
 
@@ -166,6 +170,29 @@ class BaseFeeder(data.Dataset):
         split_time = time.time() - self.cur_time
         self.record_time()
         return split_time
+
+
+class InferFeeder(BaseFeeder):
+    def __init__(self, prefix, gloss_dict, drop_ratio=1, num_gloss=-1, mode="train", transform_mode=True,
+                 datatype="lmdb"):
+        self.mode = mode
+        self.ng = num_gloss
+        self.prefix = prefix
+        self.dict = gloss_dict
+        self.data_type = datatype
+        self.transform_mode = "train" if transform_mode else "test"
+        self.inputs_list = {"prefix": ""}
+        with open(prefix, 'r') as reader:
+            for idx, sample in enumerate(reader):
+                self.inputs_list[idx] = {
+                    "prefix": "",
+                    "folder": sample.strip(),
+                    "label": "",
+                    "original_info": (sample, idx),
+                }
+        print(mode, len(self))
+        self.data_aug = self.transform()
+        print("")
 
 
 if __name__ == "__main__":

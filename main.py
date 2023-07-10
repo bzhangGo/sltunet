@@ -446,3 +446,94 @@ def evaluate(params):
         evalu.dump_tanslation(tranes, params.test_output, indices=indices)
 
     return bleu
+
+
+def inference(params):
+    # construction sign embeddings
+    tf.logging.info("Begin Constructing Sign Embeddings")
+    start_time = time.time()
+
+    from smkd.sign_embedder import SignEmbedding
+    sign_embedder = SignEmbedding(params.sign_cfg, 
+            params.gloss_path, 
+            params.img_test_file, 
+            params.smkd_model_path, 
+            str(params.gpus[0]),
+            params.eval_batch_size)
+    sign_embeddings = sign_embedder.embed()
+
+    # construct temporay file
+    tmp_file = "/tmp/tmpsignembed"
+    with open(tmp_file, 'w') as writer:
+        for key in sign_embeddings:
+            writer.write(key + '\n')
+        writer.close()
+
+    tf.logging.info(
+        "End Sign Embedding, within {} seconds".format(time.time() - start_time))
+
+    # loading dataset
+    tf.logging.info("Begin Loading Test Dataset")
+    start_time = time.time()
+    test_dataset = Dataset(params,
+                           sign_embeddings,
+                           tmp_file,
+                           tmp_file,
+                           params.eval_max_len,
+                           params.max_img_len,
+                           batch_or_token='batch')
+    tf.logging.info(
+        "End Loading dataset, within {} seconds".format(time.time() - start_time))
+
+    # Build Graph
+    with tf.Graph().as_default():
+        features = []
+        for fidx in range(max(len(params.gpus), 1)):
+            feature = {
+                "source": tf.placeholder(tf.int32, [None, None], "source"),
+                "image": tf.placeholder(tf.float32, [None, None, params.img_feature_size], "image"),
+                "mask": tf.placeholder(tf.float32, [None, None], "mask"),
+
+            }
+            features.append(feature)
+
+        # session info
+        sess = util.get_session(params.gpus)
+
+        start_time = time.time()
+        tf.logging.info("Begining Building Evaluation Graph")
+
+        # get graph
+        graph = sltunet
+
+        # set up infer graph
+        eval_seqs, eval_scores = tower_infer_graph(features, graph, params)
+
+        tf.logging.info(f"End Building Inferring Graph, within {time.time() - start_time} seconds")
+
+        # initialize the model
+        sess.run(tf.global_variables_initializer())
+
+        # log parameters
+        util.variable_printer()
+
+        # create saver
+        eval_saver = saver.Saver(checkpoints=params.checkpoints, output_dir=params.output_dir)
+
+        # restore parameters
+        tf.logging.info("Trying restore existing parameters")
+        eval_saver.restore(sess, params.output_dir)
+
+        tf.logging.info("Starting Evaluating")
+        eval_start_time = time.time()
+        tranes, scores, indices = evalu.decoding(sess, features, eval_seqs, eval_scores, test_dataset, params)
+        eval_end_time = time.time()
+
+        tf.logging.info(
+            "{} Scores {}, Duration {}s".format(
+                util.time_str(eval_end_time), np.mean(scores), eval_end_time - eval_start_time)
+        )
+
+        # save translation
+        evalu.dump_tanslation(tranes, params.test_output, indices=indices)
+

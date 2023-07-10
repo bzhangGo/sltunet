@@ -9,6 +9,9 @@
 [**Citation**](#citation)
 
 
+* Update (2023/07/09): We release the trained model for phoenix and csldaily at [here](https://data.statmt.org/bzhang/iclr2023_sltunet/). See `infer.sh` for details.
+
+
 ## Paper Highlights
 
 Among thousands of languages globally, some are written, some are spoken, while some are signed.

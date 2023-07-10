@@ -8,7 +8,11 @@ import numpy as np
 import torch.nn as nn
 from tqdm import tqdm
 import torch.nn.functional as F
-from evaluation.slr_eval.wer_calculation import evaluate
+
+try:
+    from evaluation.slr_eval.wer_calculation import evaluate
+except:
+    from .evaluation.slr_eval.wer_calculation import evaluate
 
 
 def seq_train(loader, model, optimizer, device, epoch_idx, recoder):
